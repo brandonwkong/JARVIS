@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brandon's AI Assistant</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f5f5f5;
+        }
+
+        #chat-container {
+            width: 80%;
+            max-width: 800px;
+            height: 90vh;
+            display: flex;
+            flex-direction: column;
+            margin: 20px auto;
+        }
+
+        #mode-toggle {
+            padding: 10px;
+            margin-bottom: 10px;
+            text-align: right;
+        }
+
+        #admin-login {
+            background-color: #4CAF50;
+            color: white;
+            padding: 8px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        #mode-indicator {
+            margin-left: 10px;
+            font-weight: bold;
+        }
+
+        #chatbox {
+            flex-grow: 1;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-y: auto;
+            background-color: white;
+            margin-bottom: 20px;
+        }
+
+        .input-container {
+            display: flex;
+            gap: 10px;
+        }
+
+        #userInput {
+            flex-grow: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 12px 24px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        .message {
+            margin: 10px 0;
+            padding: 12px;
+            border-radius: 8px;
+            max-width: 70%;
+        }
+
+        .user {
+            background-color: #007bff;
+            color: white;
+            margin-left: auto;
+        }
+
+        .assistant {
+            background-color: #f0f0f0;
+            color: #333;
+            margin-right: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="chat-container">
+        <div id="mode-toggle">
+            <button id="admin-login" onclick="toggleAdminMode()">Admin Mode</button>
+            <span id="mode-indicator" style="color: grey;">Public Mode</span>
+        </div>
+        <div id="chatbox"></div>
+        <div class="input-container">
+            <input type="text" id="userInput" placeholder="Type your message..." />
+            <button onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        let isAdmin = false;
+
+        async function toggleAdminMode() {
+            const password = prompt("Enter admin password:");
+            if (!password) return;
+
+            const response = await fetch('/toggle-admin', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({password: password})
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                isAdmin = data.mode === 'admin';
+                document.getElementById('mode-indicator').textContent = 
+                    isAdmin ? 'Admin Mode' : 'Public Mode';
+                document.getElementById('mode-indicator').style.color = 
+                    isAdmin ? 'green' : 'grey';
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('userInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            appendMessage(message, 'user');
+            input.value = '';
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        message: message,
+                        isAdmin: isAdmin
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+
+                const data = await response.json();
+                appendMessage(data.reply, 'assistant');
+            } catch (error) {
+                console.error('Error:', error);
+                appendMessage('Sorry, there was a network error.', 'assistant');
+            }
+        }
+
+        function appendMessage(message, sender) {
+            const chatbox = document.getElementById('chatbox');
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', sender);
+            messageElement.innerText = message;
+            chatbox.appendChild(messageElement);
+            chatbox.scrollTop = chatbox.scrollHeight;
+        }
+
+        // Allow Enter key to send message
+        document.getElementById('userInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') sendMessage();
+        });
+    </script>
+</body>
+</html>

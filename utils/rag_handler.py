@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 from utils.database import Database  # Add this with other imports
 
-load_dotenv()
+load_dotenv(override=True)
 
 class RAGHandler:
     def __init__(self):
@@ -82,28 +82,25 @@ class RAGHandler:
         self._initialize_chain(self.public_template)  # Start with public mode
 
     def load_all_knowledge(self):
+        print("\n=== LOADING KNOWLEDGE BASE ===")
         # Start with base documents
         self.documents = self._prepare_documents()
         
         # Add learned info
         learned_info = self.db.get_all_verified_info()
         for category, content in learned_info:
-            # Format learned info appropriately
-            if "I should note that" in content:
-                # Clean up the trigger phrase
-                content = content.replace("I should note that", "").strip()
-            if "actually" in content.lower():
-                content = content.replace("actually", "").strip()
-            
-            # Add to documents
-            self.documents.append(f"Additional Information - {category}: {content}")
+            if not content.startswith("Brandon"):
+                content = f"Brandon {content}"
+            self.documents.append(content)
+            print(f"Added to knowledge base: {content}")
         
         # Update vector store
         self.vector_store = Chroma.from_texts(
             texts=self.documents,
             embedding=self.embeddings
-    )
-        
+        )
+        print("=== KNOWLEDGE BASE LOADED ===\n")
+
     def _initialize_chain(self, system_template):
         self.chain = ConversationalRetrievalChain.from_llm(
             llm=self.chat_model,
@@ -121,11 +118,17 @@ class RAGHandler:
     )
 
     def get_response(self, query):
+        print(f"\nProcessing query in {'Admin' if self.admin_mode else 'Public'} mode")
+        print(f"Query: {query}")
+
         if self.admin_mode:
-            self.db.add_conversation("user", query)
-            self.admin_chat_history.append({"role": "user", "content": query})
+            # Process for potential learning
+            should_learn, learning_confirmation = self._process_learning(query, None)
+            
+            if should_learn:
+                return learning_confirmation
         
-        # Include chat_history in the query
+        # Normal response processing
         result = self.chain({
             "question": query,
             "chat_history": self.admin_chat_history if self.admin_mode else []
@@ -134,12 +137,11 @@ class RAGHandler:
         if self.admin_mode:
             self.db.add_conversation("assistant", result['answer'])
             self.admin_chat_history.append({"role": "assistant", "content": result['answer']})
-            self._process_learning(query, result['answer'])
         
         return result['answer']
 
     def toggle_admin_mode(self, password):
-        if password == "your-admin-password":  # Change this to a secure password
+        if password == os.getenv("ADMIN_PASSWORD"):  # Change this to a secure password
             self.admin_mode = not self.admin_mode
             # Reinitialize chain with appropriate template
             template = self.admin_template if self.admin_mode else self.public_template
@@ -148,17 +150,61 @@ class RAGHandler:
         return {"success": False}
 
     def _process_learning(self, query, response):
-        learning_triggers = ["I should note that", "let me correct that", 
-                            "actually,", "to update you", "I want you to know"]
+        print("\n=== ANALYZING INPUT FOR NEW INFORMATION ===")
         
-        for trigger in learning_triggers:
-            if trigger.lower() in query.lower():
+        # Create an analysis prompt
+        analysis_prompt = f"""
+        Analyze this input and determine if it contains new personal information about the user that should be saved.
+        Focus on extracting clear factual statements about hobbies, skills, or experiences.
+        
+        Input: "{query}"
+        
+        Respond in JSON format:
+        {{
+            "contains_new_info": true/false,
+            "category": "hobby/skill/experience",
+            "extracted_info": "the information in third-person format starting with 'Brandon'",
+            "confidence": 0-1
+        }}
+        """
+        
+        try:
+            analyzer = ChatOpenAI(
+                temperature=0,
+                model="gpt-3.5-turbo-0125",
+                openai_api_key=os.getenv('OPENAI_API_KEY')
+            )
+            
+            analysis_response = analyzer.invoke(analysis_prompt)
+            result = json.loads(analysis_response.content)
+            
+            print(f"Analysis result: {json.dumps(result, indent=2)}")
+            
+            if result["contains_new_info"] and result["confidence"] > 0.7:
+                # Format the information
+                info_to_save = result["extracted_info"]
+                if not info_to_save.startswith("Brandon"):
+                    info_to_save = f"Brandon {info_to_save}"
+                
+                print(f"Saving information: {info_to_save}")
+                
                 # Store in database
-                self.db.add_learned_info("general", query)
+                self.db.add_learned_info(result["category"], info_to_save)
+                
                 # Update knowledge base
                 self.load_all_knowledge()
-                break
-
+                
+                # Reinitialize chain
+                template = self.admin_template if self.admin_mode else self.public_template
+                self._initialize_chain(template)
+                
+                return True, f"I've learned something new: {info_to_save}"
+            
+            return False, None
+            
+        except Exception as e:
+            print(f"Error in learning analysis: {e}")
+            return False, None
     def _prepare_documents(self):
         documents = []
         documents.append(self.personal_data['bio']['content'])
